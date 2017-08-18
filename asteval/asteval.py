@@ -2,26 +2,33 @@
 Safe(ish) evaluator of python expressions, using ast module.
 
 """
+import inspect
+import base64
 
-from __future__ import division, print_function
+try:
+    import ujson as json
+except ImportError:
+    import json
 
 from sys import stdout
 import ast
 import math
 from time import time
+from types import ModuleType
+import builtins as __builtins
+
+import pickle
 
 from .astutils import (FROM_PY, FROM_MATH, UNSAFE_ATTRS,
                        LOCALFUNCS, op2func,
                        ReturnedNone, valid_symbol_name, quote,
-                       code_wrap, MAX_CYCLES, get_class_name, NoReturn, Empty)
+                       code_wrap, MAX_CYCLES, get_class_name, NoReturn, Empty, encode_symbol)
 
 from .frame import Frame
 from .function import Function
 from .module import Module
 
-builtins = __builtins__
-if not isinstance(builtins, dict):
-    builtins = builtins.__dict__
+builtins = __builtins.__dict__
 
 MAX_EXEC_TIME = 2  # sec
 
@@ -78,6 +85,10 @@ class Interpreter:  # pylint: disable=too-many-instance-attributes, too-many-pub
                        'importfrom',  #  NOOP
                       )
 
+    MAIN_MODULE = '__main__'
+    GLOBALS_FRAME = 'Globals'
+    BUILTINS_FRAME = 'Builtins'
+
     def __init__(self, filename='', writer=None, globals_=None, import_hook=None, max_time=MAX_EXEC_TIME):
         self.debugging = True  # Set to True to disable the runtime limiter
         self.writer = writer or stdout
@@ -93,7 +104,6 @@ class Interpreter:  # pylint: disable=too-many-instance-attributes, too-many-pub
         self.error = None
         self.expr = None
         self.prev_lineno = 0
-        self.globals_ = globals_
         self.modules = {}
         self.mod_stack = []
         self.last_func = None
@@ -112,24 +122,54 @@ class Interpreter:  # pylint: disable=too-many-instance-attributes, too-many-pub
                 self.builtins[sym] = getattr(math, sym)
 
         self.builtins['print'] = self.print_
-        self.mod_stack.append('__main__')
-        self.add_module('__main__', filename, extras={'settrace': self.set_trace})
+        self.mod_stack.append(Interpreter.MAIN_MODULE)
+        self.add_module(Interpreter.MAIN_MODULE, filename, globals_=globals_, extra_builtins={'settrace': self.set_trace})
         self.node_handlers = dict(((node, getattr(self, "on_%s" % node)) for node in self.supported_nodes))
 
-        # to rationalize try/except try/finally for Python2.6 through Python3.3
-        self.node_handlers['tryexcept'] = self.node_handlers['try']
-        self.node_handlers['tryfinally'] = self.node_handlers['try']
-
-    def add_module(self, name, filename, extras=None):
+    def add_module(self, name, filename, globals_=None, extra_builtins=None):
+        globals_ = globals_ or {}
         mod = Module(name, self, filename)
-        builtin_frame = Frame('Builtins', self.builtins)
-        if extras is not None and isinstance(extras, dict):
-            for k, v in extras.items():
+        builtin_frame = Frame(Interpreter.BUILTINS_FRAME, self.builtins)
+        if extra_builtins is not None and isinstance(extra_builtins, dict):
+            for k, v in extra_builtins.items():
                 builtin_frame.set_symbol(k, v)
         mod.push_frame(builtin_frame)
-        mod.push_frame(Frame('Globals', self.globals_, filename=filename))
+        mod.push_frame(Frame(Interpreter.GLOBALS_FRAME, globals_, filename=filename))
         self.modules[name] = mod
         return mod
+
+    def get_state(self):
+        out = {'modules': {}}
+        for mod_name, mod in self.modules.items():
+            out['modules'][mod_name] = {'frames': []}
+            for frame in mod.frames:
+                if frame.get_name() not in (Interpreter.BUILTINS_FRAME, ):
+                    out['modules'][mod_name]['frames'].append({'name': frame.get_name(),
+                                                               'filename': frame.get_filename(),
+                                                               'symbols': {}})
+                    symbols = out['modules'][mod_name]['frames'][-1]['symbols']
+                    for symbol, value in frame.get_symbols().items():
+                        print(symbol, repr(value))
+                        if isinstance(value, ModuleType):  # Native Python module
+                            value = {'type': '__PYTHON_MODULE__',
+                                     'filename': inspect.getfile(value),
+                                     'name': value.__name__}
+                        elif isinstance(value, (Module, Function)):  # ASTEVAL module or function
+                            value = value.get_state()
+                        # elif not isinstance(value, (float, int, bool, dict, list, set, type(None))):  # Some other type
+                        #     value = {'type': type(value).__name__,
+                        #              'value': encode_symbol(value)}
+                        else:  # Simple scalar or container types (but might contain other types...)
+                            value = {'type': type(value).__name__,
+                                     'value': encode_symbol(value)}
+
+                        symbols[symbol] = value
+
+        #return json.dumps(out)
+        return out
+
+    def set_state(self):
+        pass
 
     def get_main_module(self):
         return self.modules['main']
@@ -185,7 +225,7 @@ class Interpreter:  # pylint: disable=too-many-instance-attributes, too-many-pub
 
     def ui_tracer(self, s):
         if self.ui_trace_enabled:
-            self.ui_trace.append("{}:{}".format(self.get_current_frame().get_filename() or '__main__', s))
+            self.ui_trace.append("{}:{}".format(self.get_current_frame().get_filename() or Interpreter.MAIN_MODULE, s))
 
     def get_ui_trace(self):
         return self.ui_trace

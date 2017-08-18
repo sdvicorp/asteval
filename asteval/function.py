@@ -1,4 +1,7 @@
-from asteval.astutils import ReturnedNone
+import base64
+import pickle
+
+from asteval.astutils import ReturnedNone, encode_symbol
 from .frame import Frame
 
 # pylint: disable=too-many-instance-attributes, too-many-arguments
@@ -126,3 +129,15 @@ class Function:
             self.__asteval__.leave_module()
 
         return retval
+
+    def get_state(self):
+        return {'type': '__FUNCTION__',
+                 'name': self.__name__,
+                 'doc': self.__doc__,
+                 'filename': self.filename,
+                 'argnames': self.argnames,
+                 'varargs': self.vararg,
+                 'varkws': self.varkws,
+                 'kwargs': self.kwargs,
+                 'mod': self.mod,
+                 'body': encode_symbol(self.body)}

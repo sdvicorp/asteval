@@ -19,6 +19,9 @@ import requests
 from math import sqrt
 
 import requests
+from requests import Response
+
+from asteval.astutils import code_wrap
 
 PY3 = version_info[0] == 3
 PY33Plus = PY3 and version_info[1] >= 3
@@ -274,7 +277,7 @@ class TestEval(TestCase):
 
     def test_exit_value(self):
         """
-        Return value of this version of asteval is only set by a top-level `return`... 
+        Return value of this version of asteval is only set by a top-level `return`...
         the last eval. expression does NOT set this value. This is because this version
         of asteval is script-centric where-as the original asteval was expression-centric.
         """
@@ -469,7 +472,55 @@ class TestRequests(unittest.TestCase):
         self.assertIn('origin', result)
 
 
+class TestMisc(unittest.TestCase):
+    @unittest.skip
+    def test_code_wrap(self):
+        # Function `get('https://httpbin.org/ip')` returned `\"<\"Response [200]>`.\"
+
+        name = 'get'
+        arg_str = "'https://httpbin.org/ip'"
+        ret = Response()
+        ret.status_code = 200
+        trace = 'Function `{}({})` returned {}.'.format(name, arg_str, code_wrap(ret))
+        json_ = json.dumps({"section": trace})
+        self.assertEqual("", json_)
+
+    def test_get_state(self):
+        def importer(name):
+            path = "importee.py"
+            script = dedent("""
+                            x = 1
+                            def foo(y):
+                                return 42 + x + y
+                            """)
+            return path, script
+
+        out = StringIO()
+        interp = Interpreter('main.py', writer=out, globals_={'requests': requests}, import_hook=importer)
+
+        interp(dedent('''
+                    import importee
+                    z = 42
+                    x = None
+                    y = 'foo'
+                    def foo(x, y=None, *args, **kwargs):
+                        """ documentation """
+                        def bar(x):
+                            return x * x
+                        return bar(x)
+
+                    for y in range(10):
+                        print(foo(y))
+
+                    z = [foo(x) for x in range(3)]
+                    print("ok!")
+                    r = requests.Response()
+                '''))
+
+        self.maxDiff = None
+        self.assertEqual({}, interp.get_state())
+
 if __name__ == '__main__':  # pragma: no cover
-    for suite in (TestEval, TestCaseRunner, TestObjectAccess, TestRequests):
+    for suite in (TestEval, TestCaseRunner, TestObjectAccess, TestRequests, TestMisc):
         suite = unittest.TestLoader().loadTestsFromTestCase(suite)
         unittest.TextTestRunner(verbosity=2).run(suite)

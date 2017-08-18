@@ -44,3 +44,8 @@ class Module:
 
     def __str__(self):
         return repr(self)
+
+    def get_state(self):
+        return {'type': '__MODULE__',
+                'filename': self.filename,
+                'name': self.__name__}

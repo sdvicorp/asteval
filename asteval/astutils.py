@@ -4,9 +4,11 @@ utility functions for asteval
    Matthew Newville <newville@cars.uchicago.edu>,
    The University of Chicago
 """
-from __future__ import division, print_function
+import base64
 import re
 import ast
+
+import pickle
 
 MAX_EXPONENT = 10000
 MAX_STR_LEN = 2 << 17  # 256KiB
@@ -203,3 +205,9 @@ def code_wrap(s, lang=''):
     newlines = '\n' if multiline else ''
     lang = lang if multiline else ''
     return ''.join([newlines, ticks, lang, newlines, s, newlines, ticks, newlines])
+
+
+def encode_symbol(value):
+    return base64.standard_b64encode(pickle.dumps(value)).decode('utf-8')
+
+
