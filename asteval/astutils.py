@@ -189,7 +189,9 @@ def get_ast_names(astnode):
 # Markdown helpers
 
 
-def quote(s):
+def quote(s, secret=False):
+    if secret:
+        return '******'
     is_str = isinstance(s, str)
     ret = "'{}'".format(s) if is_str else str(s)
     if is_str and len(ret) > 100:
@@ -197,7 +199,9 @@ def quote(s):
     return ret
 
 
-def code_wrap(s, lang=''):
+def code_wrap(s, lang='', secret=False):
+    if secret:
+        return '******'
     s = quote(s)
     multiline = '\n' in s
     ticks = '```' if multiline else '`'

@@ -14,7 +14,7 @@ from .astutils import (FROM_PY, FROM_MATH, UNSAFE_ATTRS,
                        LOCALFUNCS, op2func, MAX_EXEC_TIME,
                        ReturnedNone, valid_symbol_name, quote,
                        code_wrap, MAX_CYCLES, get_class_name, NoReturn, Empty)
-from .frame import Frame
+from .frame import Frame, SecretValue
 from .function import Function
 from .module import Module
 
@@ -330,10 +330,12 @@ class Interpreter:  # pylint: disable=too-many-instance-attributes, too-many-pub
         """return statement: look for None, return special sentinel"""
         __retval = self.run(node.value)
 
+        __retval, secret = self.extract_secret(__retval)
+
         if self.trace:
             self.trace = self.trace(self.get_current_frame(), 'return', __retval)
 
-        self.ui_tracer("{}Returning value: `{}`".format(self.get_lineno_label(node), quote(__retval)))
+        self.ui_tracer("{}Returning value: `{}`".format(self.get_lineno_label(node), quote(__retval, secret=secret)))
         self.get_current_frame().set_retval(__retval if __retval is not None else ReturnedNone)
         return __retval
 
@@ -414,6 +416,7 @@ class Interpreter:  # pylint: disable=too-many-instance-attributes, too-many-pub
             frame = self.find_frame(node.id)
             if frame:
                 val = frame.get_symbol_value(node.id)
+                val, secret = self.extract_secret(val)
                 val_str = repr(val)
                 if not val_str.startswith('<'):
                     if isinstance(val, str):
@@ -421,7 +424,7 @@ class Interpreter:  # pylint: disable=too-many-instance-attributes, too-many-pub
 
                     if frame.is_modified(node.id):
                         self.ui_tracer("{}Value of `{}` is {}."
-                                       .format(self.get_lineno_label(node), node.id, code_wrap(val)))
+                                       .format(self.get_lineno_label(node), node.id, code_wrap(val, secret=secret)))
                         frame.reset_modified(node.id)
 
                 return val
@@ -478,6 +481,8 @@ class Interpreter:  # pylint: disable=too-many-instance-attributes, too-many-pub
         """here we assign a value (not the node.value object) to a node
         this is used by on_assign, but also by for, list comprehension, etc.
         """
+        val, secret = self.extract_secret(val)
+
         if node.__class__ == ast.Name:
             if not valid_symbol_name(node.id):
                 errmsg = "invalid symbol name (reserved word?) `%s`" % node.id
@@ -490,11 +495,11 @@ class Interpreter:  # pylint: disable=too-many-instance-attributes, too-many-pub
 
                 if val is None or isinstance(val, (str, bool, int, float, tuple, list, dict)):
                     self.ui_tracer("{}Assigned value of {} to `{}`."
-                                   .format(self.get_lineno_label(node), code_wrap(val), node.id))
+                                   .format(self.get_lineno_label(node), code_wrap(val, secret=secret), node.id))
 
                 else:
                     self.ui_tracer("{}Assigned value of {} to `{}`."
-                                   .format(self.get_lineno_label(node), code_wrap(repr(val)), node.id))
+                                   .format(self.get_lineno_label(node), code_wrap(repr(val), secret=secret), node.id))
 
         elif node.__class__ == ast.Attribute:
             if node.ctx.__class__ == ast.Load:
@@ -522,7 +527,7 @@ class Interpreter:  # pylint: disable=too-many-instance-attributes, too-many-pub
                     if modified:
                         self.ui_tracer("{}Assigned index/subscript `[{}]` of `{}` to {}."
                                        .format(self.get_lineno_label(node), quote(xslice),
-                                               path, code_wrap(val)))
+                                               path, code_wrap(val, secret=secret)))
 
                         frame = self.find_frame(name)
                         if frame:
@@ -551,7 +556,7 @@ class Interpreter:  # pylint: disable=too-many-instance-attributes, too-many-pub
 
                         self.ui_tracer("{}Assigned slice `[{}]` of `{}` to {}."
                                        .format(self.get_lineno_label(node), slice_str,
-                                               path, code_wrap(val)))
+                                               path, code_wrap(val, secret=secret)))
 
                         frame = self.find_frame(name)
                         if frame:
@@ -688,18 +693,36 @@ class Interpreter:  # pylint: disable=too-many-instance-attributes, too-many-pub
         ret = func(val)
         return ret
 
+    def extract_secret(self, val):
+        if isinstance(val, SecretValue):
+            val = val.get()
+            return val, True
+        return val, False
+
+    def return_secret(self, val, secret):
+        if secret:
+            return SecretValue(val)
+        return val
+
     def on_binop(self, node):  # ('left', 'op', 'right')
         """binary operator"""
         func, name = op2func(node.op)
         left, right = self.run(node.left), self.run(node.right)
+        left, secret_left = self.extract_secret(left)
+        right, secret_right = self.extract_secret(right)
+        secret = secret_left or secret_right
+
         ret = func(left, right)
         self.ui_tracer("{}Operation `{} {} {}` returned `{}`."
-                       .format(self.get_lineno_label(node), quote(left), name, quote(right), quote(ret)))
-        return ret
+                       .format(self.get_lineno_label(node), quote(left, secret_left), name, quote(right, secret_right),
+                               quote(ret, secret=secret)))
+
+        return self.return_secret(ret, secret)
 
     def on_boolop(self, node):  # ('op', 'values')
         """boolean operator"""
         val = self.run(node.values[0])
+        val, secret = self.extract_secret(val)
         is_and = ast.And == node.op.__class__
         if (is_and and val) or (not is_and and not val):
             for n in node.values[1:]:
@@ -707,7 +730,7 @@ class Interpreter:  # pylint: disable=too-many-instance-attributes, too-many-pub
                 val = func(val, self.run(n))
                 if (is_and and not val) or (not is_and and val):
                     break
-        self.ui_tracer("{}Boolean expression returned `{}`.".format(self.get_lineno_label(node), val))
+        self.ui_tracer("{}Boolean expression returned `{}`.".format(self.get_lineno_label(node), quote(val, secret)))
         return val
 
     def on_compare(self, node):  # ('left', 'ops', 'comparators')
@@ -979,9 +1002,10 @@ class Interpreter:  # pylint: disable=too-many-instance-attributes, too-many-pub
             self.raise_exception(node, exc=e, msg="Error calling `%s()`: %s" % (name, str(e)))
             return
 
+        ret, secret = self.extract_secret(ret)
         if name not in ('pprint', 'print', 'jprint', 'print_'):
             self.ui_tracer('{}Function `{}({})` returned {}.'
-                           .format(self.get_lineno_label(node), name, arg_str, code_wrap(ret)))
+                           .format(self.get_lineno_label(node), name, arg_str, code_wrap(ret, secret=secret)))
 
         return ret
 

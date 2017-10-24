@@ -2,18 +2,41 @@ import uuid
 
 
 class Symbol:
-    def __init__(self, name, value):
+    def __init__(self, name, value, secret=False):
         self.name = name
         self.value = value
         self.modified = True
+        self.secret = secret
 
-    def set(self, value):
+    def set(self, value, secret=False):
         self.modified = value != self.value
         self.value = value
+        self.secret = secret
         return self.modified
 
     def __repr__(self):
-        return "<Symbol {}: val={}, mod?={}>".format(self.name, self.value, self.modified)
+        return "<Symbol {}: val={}, mod?={}>".format(self.name, '******' if self.secret else self.value, self.modified)
+
+    def __str__(self):
+        return repr(self)
+
+
+class SecretValue:
+    """
+    Used for internal passing of secrets - it wraps regular values to signal secretness
+    """
+    def __init__(self, value):
+        self.value = value
+
+    def set(self, value):
+        self.value = value
+        return True
+
+    def get(self):
+        return self.value
+
+    def __repr__(self):
+        return "<SecretValue>"
 
     def __str__(self):
         return repr(self)
@@ -33,11 +56,11 @@ class Frame:
         self.__lineno = 1
         self.__filename = filename
 
-    def set_symbol(self, name, val):
+    def set_symbol(self, name, val, secret=False):
         if name in self.__symbols:
-            self.__symbols[name].set(val)
+            self.__symbols[name].set(val, secret)
         else:
-            self.__symbols[name] = Symbol(name, val)
+            self.__symbols[name] = Symbol(name, val, secret)
 
         return self.__symbols[name].modified
 
@@ -46,6 +69,12 @@ class Frame:
             return self.__symbols[name].modified
         except KeyError:
             return True
+
+    def is_secret(self, name):
+        try:
+            return self.__symbols[name].secret
+        except KeyError:
+            return False
 
     def set_modified(self, name):
         if name in self.__symbols:
