@@ -22,6 +22,8 @@ from math import sqrt
 
 import requests
 
+from asteval.frame import ReturnValue
+
 PY3 = version_info[0] == 3
 PY33Plus = PY3 and version_info[1] >= 3
 
@@ -330,6 +332,36 @@ class TestEval(TestCase):
             z = [foo(x) for x in range(3)]
             print("ok!")
         """))
+
+    def test_secrets(self):
+
+        # out = StringIO()
+        # interp = Interpreter(f, writer=out, import_hook=importer, globals_={'requests': requests})
+        # interp.set_symbol('print', interp.print_)
+        # try:
+        #     interp(script)
+        # except Exception as e:
+        #     trace = '\n'.join(interp.ui_trace)
+        #     print(trace)
+        #     self.fail("Unhandled exception! {}".format(e))
+        #
+        # actual = out.getvalue()
+
+        def get_secret(key):
+            return ReturnValue("bar", True)
+
+        self.interp.set_symbol('getSecret', get_secret)
+        self.interp(dedent("""
+            secret = getSecret("foo")
+            print(secret)
+            print("xxx" + secret)
+        """))
+
+        out = self.read_stdout()#.split('\n')
+        print(repr(out))
+
+        trace = '\n'.join(self.interp.ui_trace)
+        print(trace)
 
 
 EXPECTED_PAT = re.compile("""^#\s*(?:"([^"]+)"|'([^']+)')""")

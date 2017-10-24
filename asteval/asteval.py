@@ -14,7 +14,7 @@ from .astutils import (FROM_PY, FROM_MATH, UNSAFE_ATTRS,
                        LOCALFUNCS, op2func, MAX_EXEC_TIME,
                        ReturnedNone, valid_symbol_name, quote,
                        code_wrap, MAX_CYCLES, get_class_name, NoReturn, Empty)
-from .frame import Frame
+from .frame import Frame, ReturnValue, Symbol
 from .function import Function
 from .module import Module
 
@@ -172,8 +172,8 @@ class Interpreter:  # pylint: disable=too-many-instance-attributes, too-many-pub
     def get_global_frame(self):
         return self.get_current_module().frames[1]
 
-    def set_symbol(self, name, val):
-        return self.get_current_frame().set_symbol(name, val)
+    def set_symbol(self, name, val, secret_=False):
+        return self.get_current_frame().set_symbol(name, val, secret_)
 
     def set_trace(self, func):
         self.trace = func
@@ -330,10 +330,16 @@ class Interpreter:  # pylint: disable=too-many-instance-attributes, too-many-pub
         """return statement: look for None, return special sentinel"""
         __retval = self.run(node.value)
 
+        secret = False
+        if isinstance(__retval, ReturnValue):
+            secret = __retval.secret
+            __retval = __retval.value
+
         if self.trace:
             self.trace = self.trace(self.get_current_frame(), 'return', __retval)
 
-        self.ui_tracer("{}Returning value: `{}`".format(self.get_lineno_label(node), quote(__retval)))
+        self.ui_tracer("{}Returning value: `{}`".format(self.get_lineno_label(node),
+                                                        '******' if secret else quote(__retval)))
         self.get_current_frame().set_retval(__retval if __retval is not None else ReturnedNone)
         return __retval
 
@@ -478,23 +484,37 @@ class Interpreter:  # pylint: disable=too-many-instance-attributes, too-many-pub
         """here we assign a value (not the node.value object) to a node
         this is used by on_assign, but also by for, list comprehension, etc.
         """
+        secret = False
+        if isinstance(val, ReturnValue):
+            secret = val.secret
+            val = val.value
+        elif isinstance(val, Symbol) and val.secret:
+            secret = True
+        else:
+            frame = self.find_frame(node.id)
+            if frame:
+                symbol = frame.get_symbol_value(node.id)
+                secret = symbol.secret
+
         if node.__class__ == ast.Name:
             if not valid_symbol_name(node.id):
                 errmsg = "invalid symbol name (reserved word?) `%s`" % node.id
                 self.raise_exception(node, exc=NameError, msg=errmsg)
 
-            if self.set_symbol(node.id, val):
+            if self.set_symbol(node.id, val, secret):
                 frame = self.find_frame(node.id)
                 if frame:
                     frame.reset_modified(node.id)
+                #obj = frame.get_symbol(node.id)
 
                 if val is None or isinstance(val, (str, bool, int, float, tuple, list, dict)):
                     self.ui_tracer("{}Assigned value of {} to `{}`."
-                                   .format(self.get_lineno_label(node), code_wrap(val), node.id))
+                                   .format(self.get_lineno_label(node), '******' if secret else code_wrap(val), node.id))
 
                 else:
                     self.ui_tracer("{}Assigned value of {} to `{}`."
-                                   .format(self.get_lineno_label(node), code_wrap(repr(val)), node.id))
+                                   .format(self.get_lineno_label(node), '******' if secret else code_wrap(repr(val)),
+                                           node.id))
 
         elif node.__class__ == ast.Attribute:
             if node.ctx.__class__ == ast.Load:
@@ -522,7 +542,7 @@ class Interpreter:  # pylint: disable=too-many-instance-attributes, too-many-pub
                     if modified:
                         self.ui_tracer("{}Assigned index/subscript `[{}]` of `{}` to {}."
                                        .format(self.get_lineno_label(node), quote(xslice),
-                                               path, code_wrap(val)))
+                                               path, '******' if secret else code_wrap(val)))
 
                         frame = self.find_frame(name)
                         if frame:
@@ -551,7 +571,7 @@ class Interpreter:  # pylint: disable=too-many-instance-attributes, too-many-pub
 
                         self.ui_tracer("{}Assigned slice `[{}]` of `{}` to {}."
                                        .format(self.get_lineno_label(node), slice_str,
-                                               path, code_wrap(val)))
+                                               path, '******' if secret else code_wrap(val)))
 
                         frame = self.find_frame(name)
                         if frame:
@@ -692,6 +712,15 @@ class Interpreter:  # pylint: disable=too-many-instance-attributes, too-many-pub
         """binary operator"""
         func, name = op2func(node.op)
         left, right = self.run(node.left), self.run(node.right)
+        try:
+            left_id = node.left.id
+        except AttributeError:
+            pass
+        try:
+            right_id = node.right.id
+        except AttributeError:
+            pass
+
         ret = func(left, right)
         self.ui_tracer("{}Operation `{} {} {}` returned `{}`."
                        .format(self.get_lineno_label(node), quote(left), name, quote(right), quote(ret)))
@@ -727,12 +756,14 @@ class Interpreter:  # pylint: disable=too-many-instance-attributes, too-many-pub
 
     def print_(self, *objects, sep=' ', end='\n'):
         """generic print function"""
+        #temp = []
+        #[temp.append(obj.get_print_value()) for obj in objects]
         print(*objects, file=self.writer, sep=sep, end=end)
         return NoReturn
 
     def vars_(self, obj=None):
         var_dict = self.get_current_frame().get_symbols().copy()
-        return {k: v for k, v in var_dict.items() if not repr(v).startswith(('<module', '<bound'))}
+        return {k: v.get_print_value() for k, v in var_dict.items() if not repr(v).startswith(('<module', '<bound'))}
 
     def on_if(self, node):  # ('test', 'body', 'orelse')
         """regular if-then-else statement"""
@@ -979,9 +1010,14 @@ class Interpreter:  # pylint: disable=too-many-instance-attributes, too-many-pub
             self.raise_exception(node, exc=e, msg="Error calling `%s()`: %s" % (name, str(e)))
             return
 
+        secret = False
+        if isinstance(ret, ReturnValue):
+            secret = ret.secret
+            ret = ret.value
+
         if name not in ('pprint', 'print', 'jprint', 'print_'):
             self.ui_tracer('{}Function `{}({})` returned {}.'
-                           .format(self.get_lineno_label(node), name, arg_str, code_wrap(ret)))
+                           .format(self.get_lineno_label(node), name, arg_str, '******' if secret else code_wrap(ret)))
 
         return ret
 

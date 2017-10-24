@@ -2,18 +2,44 @@ import uuid
 
 
 class Symbol:
-    def __init__(self, name, value):
+    def __init__(self, name, value, secret_=False):
         self.name = name
         self.value = value
+        self.secret = secret_
         self.modified = True
 
-    def set(self, value):
+    def set(self, value, secret_=False):
         self.modified = value != self.value
         self.value = value
+        self.secret = secret_
         return self.modified
 
     def __repr__(self):
-        return "<Symbol {}: val={}, mod?={}>".format(self.name, self.value, self.modified)
+        return "<Symbol {}: val={!r}, mod?={}>".format(self.name, '******' if self.secret else self.value,
+                                                     self.modified)
+
+    def __str__(self):
+        return repr(self)
+
+    def get_print_value(self):
+        return '******' if self.secret else self.value
+
+
+class ReturnValue:
+    def __init__(self, value, secret_=False):
+        self.value = value
+        self.secret = secret_
+        self.modified = True
+
+    def set(self, value, secret_=False):
+        #self.modified = value != self.value
+        self.value = value
+        self.secret = secret_
+        #return self.modified
+        return True
+
+    def __repr__(self):
+        return "<ReturnValue: val={!r}>".format('******' if self.secret else self.value)
 
     def __str__(self):
         return repr(self)
@@ -33,11 +59,11 @@ class Frame:
         self.__lineno = 1
         self.__filename = filename
 
-    def set_symbol(self, name, val):
+    def set_symbol(self, name, val, secret_=False):
         if name in self.__symbols:
-            self.__symbols[name].set(val)
+            self.__symbols[name].set(val, secret_)
         else:
-            self.__symbols[name] = Symbol(name, val)
+            self.__symbols[name] = Symbol(name, val, secret_)
 
         return self.__symbols[name].modified
 
