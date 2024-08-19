@@ -530,7 +530,7 @@ class Interpreter:  # pylint: disable=too-many-instance-attributes, too-many-pub
         elif node.__class__ == ast.Subscript:
             sym = self.run(node.value)
             xslice = self.run(node.slice)
-            if isinstance(node.slice, (ast.Index, ast.Constant)):
+            if isinstance(node.slice, (ast.Index, ast.Constant, ast.Name)):
                 try:
                     prev_val = sym[xslice]
                 except (IndexError, KeyError):
@@ -674,7 +674,7 @@ class Interpreter:  # pylint: disable=too-many-instance-attributes, too-many-pub
             elif tnode.__class__ == ast.Subscript:
                 sym = self.run(tnode.value)
                 xslice = self.run(tnode.slice)
-                if isinstance(tnode.slice, (ast.Index, ast.Constant)):
+                if isinstance(tnode.slice, (ast.Index, ast.Constant, ast.Name)):
                     del sym[xslice]
                     self.ui_tracer("{}Deleted index/subscript {} of `{}`."
                                    .format(self.get_lineno_label(node), self.code_wrap(xslice), tnode.value.id))
